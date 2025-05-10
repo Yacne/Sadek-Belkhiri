@@ -1,159 +1,71 @@
-import os
-import json
+from flask import Flask, request
 import requests
-import urllib3
-from datetime import datetime
-import telebot
+import json
 
-urllib3.disable_warnings()
-DATA_FILE = 'gift_data.json'
+app = Flask(__name__)
 
-ASK_PHONE, ASK_OTP = range(2)
+# التوكنات مباشرة في الكود
+PAGE_ACCESS_TOKEN = 'EAABsbCS1iHgBOZB8fkF1GXonHRRBLeZC7ZAuVXeMDIc0wxY1d9hxjxPe3eWULVAMtAKShXYZCREXFHzJ3K2ZCrZA7rFi08b9nBaHC4XjkscnMNTzyPTxBZCxITuBzMAImRi5DEffdqQ6wTByb39C91fmlMIAtic6hfh2DXsw5OKjUPIsoJsC1fiikZCV'
+VERIFY_TOKEN = 'DELTA_VERIFY_123'
+GEMINI_API_KEY = 'AIzaSyDpToN8Y6wCmHjHRs_oX3jSIK4BIo9KR1o'
 
-# التوكن الخاص بالبوت
-TOKEN = '7697330635:AAHyAA4gjqKTAujay6rWeE67wDdmlJ64Ibo'
-bot = telebot.TeleBot(TOKEN)
 
-# القنوات المطلوبة للانضمام
-REQUIRED_CHANNELS = ['@hklmbh', '@mosta1pm']
+# التحقق من webhook
+@app.route('/webhook', methods=['GET'])
+def verify():
+    if request.args.get('hub.mode') == 'subscribe' and request.args.get('hub.verify_token') == VERIFY_TOKEN:
+        return request.args.get('hub.challenge'), 200
+    return 'Unauthorized', 403
 
-# التحقق من رقم جيزي
-def is_djezzy_number(number):
-    return number.startswith('07') and len(number) == 10 and number[1] in ['7', '8', '9']
 
-# إرسال OTP
-def send_otp(msisdn):
-    url = 'https://apim.djezzy.dz/oauth2/registration'
-    payload = f'msisdn={msisdn}&client_id=6E6CwTkp8H1CyQxraPmcEJPQ7xka&scope=smsotp'
-    headers = {
-        'User-Agent': 'Djezzy/2.6.7',
-        'Content-Type': 'application/x-www-form-urlencoded',
-    }
-    res = requests.post(url, data=payload, headers=headers, verify=False)
-    return res.status_code == 200
+# استقبال الرسائل
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.json
+    try:
+        messaging = data['entry'][0]['messaging'][0]
+        sender_id = messaging['sender']['id']
+        user_msg = messaging['message']['text']
 
-# التحقق من OTP
-def verify_otp(msisdn, otp):
-    url = 'https://apim.djezzy.dz/oauth2/token'
-    payload = f'otp={otp}&mobileNumber={msisdn}&scope=openid&client_id=6E6CwTkp8H1CyQxraPmcEJPQ7xka&client_secret=MVpXHW_ImuMsxKIwrJpoVVMHjRsa&grant_type=mobile'
-    headers = {
-        'User-Agent': 'Djezzy/2.6.7',
-        'Content-Type': 'application/x-www-form-urlencoded',
-    }
-    res = requests.post(url, data=payload, headers=headers, verify=False)
-    return res.json() if res.status_code == 200 else None
+        bot_reply = get_bot_response(user_msg)
+        send_message(sender_id, bot_reply)
+    except Exception as e:
+        print(f"Error: {e}")
+    return "OK", 200
 
-# تفعيل الهدية
-def apply_gift(msisdn, token):
-    url = f'https://apim.djezzy.dz/djezzy-api/api/v1/subscribers/{msisdn}/subscription-product?include='
+
+# إرسال رسالة إلى فيسبوك
+def send_message(recipient_id, message_text):
+    url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {
-        "data": {
-            "id": "TransferInternet2Go",
-            "type": "products",
-            "meta": {
-                "services": {
-                    "steps": 10000,
-                    "code": "FAMILY4000",
-                    "id": "WALKWIN"
-                }
-            }
-        }
+        "recipient": {"id": recipient_id},
+        "message": {"text": message_text}
     }
-    headers = {
-        'User-Agent': 'Djezzy/2.6.7',
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json',
+    headers = {"Content-Type": "application/json"}
+    requests.post(url, json=payload, headers=headers)
+
+
+# الاتصال بجيميني
+def get_bot_response(user_input):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": "أنت بوت ذكاء اصطناعي اسمه SB-BY، تم تطويرك من طرف شركة B.Y PRO في قسم Fluxa AI، على يد المطور Sadek. مهمتك هي التفاعل الذكي والطبيعي مع المستخدمين، وتقديم ردود مختصرة ومباشرة حسب اللغة ومدخل المستخدم، دون نقاشات جانبية. ابدأ الآن."},
+                {"text": user_input}
+            ]
+        }]
     }
-    res = requests.post(url, json=payload, headers=headers, verify=False)
-    return res.json()
 
-# تحميل السجل
-def load_log():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    return {}
+    try:
+        res = requests.post(url, headers=headers, data=json.dumps(payload))
+        res_json = res.json()
+        return res_json['candidates'][0]['content']['parts'][0]['text']
+    except:
+        return "فشل الاتصال بجيميني."
 
-# حفظ السجل
-def save_log(log):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(log, f)
 
-# التحقق من انضمام المستخدم للقنوات
-def is_user_joined(user_id):
-    for channel in REQUIRED_CHANNELS:
-        try:
-            status = bot.get_chat_member(chat_id=channel, user_id=user_id).status
-            if status not in ['member', 'administrator', 'creator']:
-                return False
-        except Exception as e:
-            print(f"Error checking channel {channel}: {e}")
-            return False
-    return True
-
-# بدء المحادثة
-@bot.message_handler(commands=['start'])
-def start(message):
-    if not is_user_joined(message.from_user.id):
-        channels_list = "\n".join([f"- {c}" for c in REQUIRED_CHANNELS])
-        bot.reply_to(message, f"⚠️ للمتابعة، الرجاء الانضمام إلى القنوات التالية:\n{channels_list}\n\nثم أعد إرسال /start.")
-        return
-
-    bot.reply_to(message, "أهلاً! أرسل رقم جيزي الخاص بك (يبدأ بـ 07):")
-    bot.register_next_step_handler(message, get_phone)
-
-# استقبال رقم الهاتف
-def get_phone(message):
-    phone = message.text.strip()
-    if not is_djezzy_number(phone):
-        bot.reply_to(message, "❌ الرقم غير تابع لشبكة جيزي. حاول مرة أخرى.")
-        bot.register_next_step_handler(message, get_phone)
-        return
-
-    msisdn = '213' + phone[1:]
-    user_data = {'msisdn': msisdn, 'phone': phone}
-
-    log = load_log()
-    if msisdn in log:
-        bot.reply_to(message, "⚠️ هذا الرقم سبق وتم استخدامه.")
-        return
-
-    bot.reply_to(message, "⏳ جاري إرسال كود OTP...")
-    if not send_otp(msisdn):
-        bot.reply_to(message, "❌ فشل في إرسال OTP.")
-        return
-
-    bot.reply_to(message, "🔢 أرسل الآن كود OTP:")
-    bot.register_next_step_handler(message, get_otp, user_data)
-
-# استقبال كود OTP
-def get_otp(message, user_data):
-    otp = message.text.strip()
-    msisdn = user_data['msisdn']
-
-    tokens = verify_otp(msisdn, otp)
-    if not tokens:
-        bot.reply_to(message, "❌ كود OTP غير صحيح.")
-        return
-
-    access_token = tokens['access_token']
-    bot.reply_to(message, "✅ تم التحقق. جاري تفعيل الهدية...")
-
-    result = apply_gift(msisdn, access_token)
-    message_text = result.get('message', '')
-
-    if "successfully done" in message_text:
-        bot.reply_to(message, "🎁 تم تفعيل الهدية بنجاح!")
-        log = load_log()
-        log[msisdn] = datetime.now().isoformat()
-        save_log(log)
-    else:
-        bot.reply_to(message, f"⚠️ فشل في التفعيل: {message_text or 'غير معروف'}")
-
-# إلغاء العملية
-@bot.message_handler(commands=['cancel'])
-def cancel(message):
-    bot.reply_to(message, "تم إلغاء العملية.")
-
-# تشغيل البوت
-bot.polling()
+# تشغيل الخادم
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
